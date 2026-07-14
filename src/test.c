@@ -1,18 +1,48 @@
+/// Compile with:
+/// gcc-15 -g -I./libs/raylib/raylib-6.0_macos/include ./libs/raylib/raylib-6.0_macos/lib/libraylib.a -framework CoreVideo -framework IOKit -framework Cocoa -framework GLUT -framework OpenGL -fopenmp ./src/test.c -o test
+///
+/// Run with:
+/// ./test
+
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-// #include <raylib.h>
+#include <unistd.h>
+#include <time.h>
+#include <raylib.h>
 
 /// Computes a neighborhood diameter given its radius.
-#define FB_NH_DIAM_2D(r) (2 * (r) + 1)
+#define FB_NH_DIAM_2D(r) ((2 * (r)) + 1)
+
+// Translates bidimensional indexes to a monodimensional one.
+// |i| is the row index.
+// |j| is the column index.
+// |m| is the number of columns (length of the rows).
+#define FB_IDX2D(i, j, m) (((m) * (j)) + (i))
 
 typedef uint64_t fb_field_size_t;
-typedef uint8_t fb_cell_state_t;
+// typedef uint8_t fb_cell_state_t;
 typedef uint8_t fb_nh_radius_t;
 
 // Using a 32 bit integer ensures a neighborhood radius of 255 (the maximum 8-bit value) is still supported.
 typedef uint32_t fb_nh_count_t;
+
+typedef enum {
+    FB_ERROR_NONE = 0x00u,
+    FB_ERROR_FAILED_ALLOC = 0x01u,
+    FB_ERROR_WRONG_FORMAT = 0x02u
+} fb_error_code_t;
+
+typedef enum {
+    FB_INACTIVE = 0x00u,
+    FB_ACTIVE = 0x01u
+} fb_cell_state_t;
+
+typedef enum {
+    FB_FALSE = 0x00u,
+    FB_TRUE = 0x01u
+} fb_bool_t;
 
 /// @brief Basic struct for a field. Includes all data and the neighborhood radius, along with the ruleset.
 typedef struct {
@@ -30,6 +60,37 @@ typedef struct {
     fb_field_size_t* b_conds;
 } fb_field2d_t;
 
+int mod(int a, int b) {
+    int r = a % b;
+    return r < 0 ? r + b : r;
+}
+
+fb_error_code_t f2d_set_rules(
+    fb_field2d_t* field,
+    fb_field_size_t nh_radius,
+    fb_field_size_t s_conds_count,
+    fb_field_size_t* s_conds,
+    fb_field_size_t b_conds_count,
+    fb_field_size_t* b_conds
+) {
+    // Set neighborhood radius.
+    field->nh_radius = nh_radius;
+
+    // Set survival conditions.
+    field->s_conds_count = s_conds_count;
+    field->s_conds = (fb_field_size_t*) malloc(s_conds_count * sizeof(fb_field_size_t));
+    if (field->s_conds == NULL) return FB_ERROR_FAILED_ALLOC;
+    memcpy(field->s_conds, s_conds, s_conds_count * sizeof(fb_field_size_t));
+
+    // Set birth conditions.
+    field->b_conds_count = b_conds_count;
+    field->b_conds = (fb_field_size_t*) malloc(b_conds_count * sizeof(fb_field_size_t));
+    if (field->b_conds == NULL) return FB_ERROR_FAILED_ALLOC;
+    memcpy(field->b_conds, b_conds, b_conds_count * sizeof(fb_field_size_t));
+
+    return FB_ERROR_NONE;
+}
+
 /// @brief Sets the field rules from a rulestring.
 /// Rulestring is adapted from the standard S/B notation, but changed in order to account for larger neighborhood radiuses.
 /// Rulestrings always present rules for both S (survival) and B (birth), even if there's no survival or birth condition at all.
@@ -38,55 +99,348 @@ typedef struct {
 /// Rules sections (radius, survival and birth) of the string are separated by a forward slash character.
 /// The notorious Conway's Game of Life ruleset can therefore be expressed as R:1/S:2,3/B:3, meaning it works with a neighborhood radius of 1,
 /// active cells stay active if 2 or 3 neighbors are active and inactive cells only become active if exactly 3 neighbors are active.
-int f2d_set_rules(
+fb_error_code_t f2d_set_rulestr(
     fb_field2d_t* field,
     char* rulestr
 ) {
     char* r_str = strtok(rulestr, "/");
-    if (r_str == NULL) return 1;
+    if (r_str == NULL) return FB_ERROR_WRONG_FORMAT;
     char* s_str = strtok(NULL, "/");
-    if (s_str == NULL) return 1;
+    if (s_str == NULL) return FB_ERROR_WRONG_FORMAT;
     char* b_str = strtok(NULL, "/");
-    if (b_str == NULL) return 1;
+    if (b_str == NULL) return FB_ERROR_WRONG_FORMAT;
 
     // Read radius.
+    // Reading the radius is the simplest step, as it's expected to only be one number.
     char* r_valstr = r_str + 2;
     fb_nh_radius_t r_val = atoi(r_valstr);
+    field->nh_radius = r_val;
 
     // Read survival conditions.
     fb_field_size_t s_conds_count = 0;
     fb_field_size_t* s_conds = (fb_field_size_t*) malloc(100 * sizeof(fb_field_size_t));
+    if (s_conds == NULL) return FB_ERROR_FAILED_ALLOC;
     char* s_valstr = strtok(s_str + 2, ",");
     while (s_valstr != NULL) {
         s_conds_count++;
         s_conds[s_conds_count - 1] = atoi(s_valstr);
         s_valstr = strtok(NULL, ",");
     }
-
     field->s_conds_count = s_conds_count;
     field->s_conds = (fb_field_size_t*) malloc(s_conds_count * sizeof(fb_field_size_t));
+    if (field->s_conds == NULL) return FB_ERROR_FAILED_ALLOC;
     memcpy(field->s_conds, s_conds, s_conds_count * sizeof(fb_field_size_t));
 
     // Read birth conditions.
     fb_field_size_t b_conds_count = 0;
     fb_field_size_t* b_conds = (fb_field_size_t*) malloc(100 * sizeof(fb_field_size_t));
+    if (b_conds == NULL) return FB_ERROR_FAILED_ALLOC;
     char* b_valstr = strtok(b_str + 2, ",");
     while (b_valstr != NULL) {
         b_conds_count++;
         b_conds[b_conds_count - 1] = atoi(b_valstr);
         b_valstr = strtok(NULL, ",");
     }
-
     field->b_conds_count = b_conds_count;
     field->b_conds = (fb_field_size_t*) malloc(b_conds_count * sizeof(fb_field_size_t));
+    if (field->b_conds == NULL) return FB_ERROR_FAILED_ALLOC;
     memcpy(field->b_conds, b_conds, b_conds_count * sizeof(fb_field_size_t));
+
+    return FB_ERROR_NONE;
 }
 
-void main() {
-    fb_field2d_t* field = (fb_field2d_t*) malloc(sizeof(fb_field2d_t));
-    field->width = 100;
-    field->height = 100;
-    field->data = (fb_cell_state_t*) malloc(field->width * field->height * sizeof(fb_cell_state_t));
+fb_error_code_t f2d_alloc(fb_field2d_t** field) {
+    (*field) = (fb_field2d_t*) malloc(sizeof(fb_field2d_t));
+    if ((*field) == NULL) return FB_ERROR_FAILED_ALLOC;
+
+    return FB_ERROR_NONE;
+}
+
+fb_error_code_t f2d_clear(
+    fb_field2d_t* field,
+    fb_cell_state_t state
+) {
+    for (fb_field_size_t i = 0; i < field->width * field->height; i++) {
+        field->data[i] = state;
+    }
+}
+
+fb_error_code_t f2d_rinit(
+    fb_field2d_t* field,
+    fb_field_size_t width,
+    fb_field_size_t height
+) {
+    field->width = width;
+    field->height = height;
+    field->data = (fb_cell_state_t*) malloc(width * height * sizeof(fb_cell_state_t));
+    if (field->data == NULL) return FB_ERROR_FAILED_ALLOC;
+
+    // Randomly populate data.
+    for (fb_field_size_t i = 0; i < width * height; i++) {
+        // Make sure the random value is limited to the values domain by only picking the very last bit.
+        field->data[i] = rand() & 0x01;
+    }
+
+    return FB_ERROR_NONE;
+}
+
+fb_error_code_t f2d_rinitr(
+    fb_field2d_t* field,
+    fb_field_size_t width,
+    fb_field_size_t height,
+    fb_field_size_t nh_radius,
+    fb_field_size_t s_conds_count,
+    fb_field_size_t* s_conds,
+    fb_field_size_t b_conds_count,
+    fb_field_size_t* b_conds
+) {
+    fb_error_code_t err = f2d_rinit(field, width, height);
+    if (err != FB_ERROR_NONE) return err;
+
+    err = f2d_set_rules(
+        field,
+        nh_radius,
+        s_conds_count,
+        s_conds,
+        b_conds_count,
+        b_conds
+    );
+    if (err != FB_ERROR_NONE) return err;
+
+    return FB_ERROR_NONE;
+}
+
+fb_error_code_t f2d_rinits(
+    fb_field2d_t* field,
+    fb_field_size_t width,
+    fb_field_size_t height,
+    char* rulestr
+) {
+    fb_error_code_t err = f2d_rinit(field, width, height);
+    if (err != FB_ERROR_NONE) return err;
+
+    err = f2d_set_rulestr(field, rulestr);
+    if (err != FB_ERROR_NONE) return err;
+
+    return FB_ERROR_NONE;
+}
+
+fb_error_code_t f2d_rcreate(
+    fb_field2d_t** field,
+    fb_field_size_t width,
+    fb_field_size_t height,
+    char* rulestr
+) {
+    fb_error_code_t err = f2d_alloc(field);
+    if (err != FB_ERROR_NONE) return err;
+
+    err = f2d_rinits(*field, width, height, rulestr);
+    if (err != FB_ERROR_NONE) return err;
+
+    return FB_ERROR_NONE;
+}
+
+fb_error_code_t f2d_create_from(
+    fb_field2d_t** field,
+    fb_field2d_t* other
+) {
+    // Allocate the field.
+    fb_error_code_t err = f2d_alloc(field);
+    if (err != FB_ERROR_NONE) return err;
+
+    // Populate its cells from other.
+    (*field)->width = other->width;
+    (*field)->height = other->height;
+    (*field)->data = (fb_cell_state_t*) malloc(other->width * other->height * sizeof(fb_cell_state_t));
+    if ((*field)->data == NULL) return FB_ERROR_FAILED_ALLOC;
+    for (fb_field_size_t i = 0; i < other->width * other->height; i++) {
+        (*field)->data[i] = other->data[i];
+    }
+
+    // Populate rules from other.
+    err = f2d_set_rules(
+        *field,
+        other->nh_radius,
+        other->s_conds_count,
+        other->s_conds,
+        other->b_conds_count,
+        other->b_conds
+    );
+    if (err != FB_ERROR_NONE) return err;
+
+    return FB_ERROR_NONE;
+}
+
+fb_error_code_t f2d_tick(
+    fb_field2d_t* prev_field,
+    fb_field2d_t* next_field
+) {
+    #pragma omp parallel for collapse(2)
+    for (fb_field_size_t j = 0; j < prev_field->height; j++) {
+        for (fb_field_size_t i = 0; i < prev_field->width; i++) {
+            // Read current cell state.
+            fb_field_size_t cell_index = FB_IDX2D(i, j, prev_field->width);
+            fb_cell_state_t cell_state = prev_field->data[cell_index];
+
+            // Count active neighbors.
+            fb_field_size_t nh_diam = FB_NH_DIAM_2D(prev_field->nh_radius);
+            fb_field_size_t active_nbs_count = 0;
+            for (fb_field_size_t y = 0; y < nh_diam; y++) {
+                for (fb_field_size_t x = 0; x < nh_diam; x++) {
+                    int nb_x = mod(i + (x - prev_field->nh_radius), prev_field->width);
+                    int nb_y = mod(j + (y - prev_field->nh_radius), prev_field->height);
+
+                    // Skip the current cell itself in neighbors count.
+                    if (nb_x == i && nb_y == j) continue;
+
+                    if (prev_field->data[FB_IDX2D(nb_x, nb_y, prev_field->width)])
+                        active_nbs_count++;
+                }
+            }
+
+            // Now check against rules in order to compute the next state.
+            if (cell_state == FB_ACTIVE) {
+                // Survival rules.
+                fb_bool_t s_conds_met = FB_FALSE;
+                for (fb_field_size_t s = 0; s < prev_field->s_conds_count; s++) {
+                    if (prev_field->s_conds[s] == active_nbs_count) {
+                        s_conds_met = FB_TRUE;
+                        break;
+                    }
+                }
+
+                // Set the cell state.
+                next_field->data[cell_index] = s_conds_met ? FB_ACTIVE : FB_INACTIVE;
+            } else if (cell_state == FB_INACTIVE) {
+                // Birth rules.
+                fb_bool_t b_conds_met = FB_FALSE;
+                for (fb_field_size_t b = 0; b < prev_field->b_conds_count; b++) {
+                    if (prev_field->b_conds[b] == active_nbs_count) {
+                        b_conds_met = FB_TRUE;
+                        break;
+                    }
+                }
+
+                // Set the cell state.
+                next_field->data[cell_index] = b_conds_met ? FB_ACTIVE : FB_INACTIVE;
+            }
+        }
+    }
+
+    return FB_ERROR_NONE;
+}
+
+fb_error_code_t draw_field(
+    fb_field2d_t* field,
+    int window_width,
+    int window_height
+) {
+    const int cell_width = window_width / field->width;
+    const int cell_height = window_height / field->height;
+    const Color active_color = RAYWHITE;
+    const Color inactive_color = BLACK;
+
+    // Draw cells.
+    for (fb_field_size_t i = 0; i < field->width * field->height; i++) {
+        // Read current cell state.
+        fb_cell_state_t cell_state = field->data[i];
+
+        fb_field_size_t cell_location_x = i % field->width;
+        fb_field_size_t cell_location_y = i / field->height;
+
+        DrawRectangle(cell_location_x * cell_width, cell_location_y * cell_height, cell_width, cell_height, cell_state == FB_ACTIVE ? active_color : inactive_color);
+    }
+
+    return FB_ERROR_NONE;
+}
+
+void main(int argc, char* argv[]) {
+    srand(time(NULL));
+
+    fb_field2d_t* even_field;
     char rulestr[] = "R:1/S:2,3/B:3";
-    f2d_set_rules(field, rulestr);
+    fb_error_code_t err = f2d_rcreate(&even_field, 500, 500, argc > 1 ? argv[1] : rulestr);
+    if (err != FB_ERROR_NONE) {
+        printf("ERROR creating field: %u\n", err);
+        return;
+    }
+
+    fb_field2d_t* odd_field;
+    err = f2d_create_from(&odd_field, even_field);
+    if (err != FB_ERROR_NONE) {
+        printf("ERROR cloning field: %u\n", err);
+        return;
+    }
+    const int screen_width = 500;
+    const int screen_height = 500;
+    InitWindow(
+        screen_width,
+        screen_height,
+        "Fabric test"
+    );
+
+    const int canvas_width = even_field->width;
+    const int canvas_height = even_field->height;
+    RenderTexture2D canvas = LoadRenderTexture(
+        canvas_width,
+        canvas_height
+    );
+    SetTextureFilter(canvas.texture, TEXTURE_FILTER_BILINEAR);
+
+    SetTargetFPS(0);
+
+    for (uint64_t i = 0; !WindowShouldClose(); i++) {
+        fb_field2d_t* prev_field = i % 2 ? odd_field : even_field;
+        fb_field2d_t* next_field = i % 2 ? even_field : odd_field;
+
+        fb_error_code_t err = f2d_tick(prev_field, next_field);
+
+        BeginTextureMode(canvas);
+            ClearBackground(BLACK);
+            
+            draw_field(
+                prev_field,
+                canvas_width,
+                canvas_height
+            );
+        EndTextureMode();
+
+        BeginDrawing();
+            ClearBackground(BLACK);
+
+            // Source rectangle: The entire canvas texture. 
+            // *CRITICAL*: The negative height flips the texture upright.
+            Rectangle source_rec = { 
+                0.0f, 
+                0.0f, 
+                (float) canvas.texture.width, 
+                -(float) canvas.texture.height 
+            };
+
+            // Destination rectangle: Where on the screen to draw it and how big.
+            // We set it to the screen width and height to scale it down.
+            Rectangle dest_rec = { 
+                0.0f, 
+                0.0f, 
+                (float) screen_width, 
+                -(float) screen_height
+            };
+
+            // Origin is the rotation pivot point (top-left is 0,0)
+            Vector2 origin = {0.0f, 0.0f};
+
+            // Draw the texture scaled to destRec
+            DrawTexturePro(
+                canvas.texture,
+                source_rec,
+                dest_rec,
+                origin,
+                0.0f,
+                WHITE
+            );
+            
+        EndDrawing();
+    }
+
+    CloseWindow();
 }

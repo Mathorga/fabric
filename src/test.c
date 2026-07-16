@@ -1,8 +1,22 @@
 /// Compile with:
-/// gcc-15 -g -I./libs/raylib/raylib-6.0_macos/include ./libs/raylib/raylib-6.0_macos/lib/libraylib.a -framework CoreVideo -framework IOKit -framework Cocoa -framework GLUT -framework OpenGL -fopenmp ./src/test.c -o test
+/// mkdir -p ./bin && gcc-15 -g -I./libs/raylib/raylib-6.0_macos/include ./libs/raylib/raylib-6.0_macos/lib/libraylib.a -framework CoreVideo -framework IOKit -framework Cocoa -framework GLUT -framework OpenGL -fopenmp ./src/test.c -o ./bin/test
 ///
 /// Run with:
-/// ./test
+/// ./bin/test
+///
+/// Interesting rulestrings:
+/// R:1/S:2,3/B:3 (Conway's Game of Life)
+/// R:1/S:2,3,6/B:3
+/// R:1/S:5,6,7,8/B:3,5,6,7,8 (Diamoeba)
+/// R:1/S:2,4,6,7,8/B:3,5,7,8 (Geology)
+/// R:1/S:3,5,6,7,8/B:4,6,7,8 (Anneal)
+/// R:2/S:3,5,7/B:6,7,9
+/// R:2/S:3,5,8/B:6,7,9
+/// R:2/S:10,11,13/B:6,7,9
+/// R:2/S:9,10,13/B:5,8,9
+/// R:3/S:20,21/B:10,11,12,14,15,23,30
+/// R:3/S:20,21/B:10,11,12,14,15,23,31,38,42
+/// R:4/S:12,20/B:11,14,15,23,31,38,45
 
 #include <stdio.h>
 #include <stdint.h>
@@ -20,6 +34,11 @@
 // |j| is the column index.
 // |m| is the number of columns (length of the rows).
 #define FB_IDX2D(i, j, m) (((m) * (j)) + (i))
+
+#define FIELD_WIDTH 2000u
+#define FIELD_HEIGHT 2000u
+#define WINDOW_WIDTH 500u
+#define WINDOW_HEIGHT 500u
 
 typedef uint64_t fb_field_size_t;
 // typedef uint8_t fb_cell_state_t;
@@ -359,7 +378,7 @@ void main(int argc, char* argv[]) {
 
     fb_field2d_t* even_field;
     char rulestr[] = "R:1/S:2,3/B:3";
-    fb_error_code_t err = f2d_rcreate(&even_field, 500, 500, argc > 1 ? argv[1] : rulestr);
+    fb_error_code_t err = f2d_rcreate(&even_field, FIELD_WIDTH, FIELD_HEIGHT, argc > 1 ? argv[1] : rulestr);
     if (err != FB_ERROR_NONE) {
         printf("ERROR creating field: %u\n", err);
         return;
@@ -371,11 +390,9 @@ void main(int argc, char* argv[]) {
         printf("ERROR cloning field: %u\n", err);
         return;
     }
-    const int screen_width = 500;
-    const int screen_height = 500;
     InitWindow(
-        screen_width,
-        screen_height,
+        WINDOW_WIDTH,
+        WINDOW_HEIGHT,
         "Fabric test"
     );
 
@@ -422,8 +439,8 @@ void main(int argc, char* argv[]) {
             Rectangle dest_rec = { 
                 0.0f, 
                 0.0f, 
-                (float) screen_width, 
-                -(float) screen_height
+                (float) WINDOW_WIDTH, 
+                -(float) WINDOW_HEIGHT
             };
 
             // Origin is the rotation pivot point (top-left is 0,0)

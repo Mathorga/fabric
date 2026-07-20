@@ -38,12 +38,20 @@ typedef enum {
     FB_TRUE = 0x01u
 } fb_bool_t;
 
+// Neighborhood type defines which cells are included from the neighborhood.
+// Von Neuman neighborhoods include all cells in the neighborhood, whereas Moore neighborhoods only include cells coordinates sum up to R (R being the neighborhood radius). 
+typedef enum {
+    FB_V_NEUMANN = 0x00u,
+    FB_MOORE = 0x01u
+} fb_nh_type_t;
+
 /// @brief Basic struct for a field. Includes all data and the neighborhood radius, along with the ruleset.
 typedef struct {
     fb_field_size_t width;
     fb_field_size_t height;
     fb_cell_state_t* data;
     fb_nh_radius_t nh_radius;
+    fb_nh_type_t nh_type;
 
     /// @brief Survival conditions: tells what specific amounts of active neighbors are needed for an active cell to stay active.
     fb_field_size_t s_conds_count;
@@ -62,6 +70,7 @@ int fb_mod(int a, int b) {
 fb_error_code_t f2d_set_rules(
     fb_field2d_t* field,
     fb_field_size_t nh_radius,
+    fb_nh_type_t nh_type,
     fb_field_size_t s_conds_count,
     fb_field_size_t* s_conds,
     fb_field_size_t b_conds_count,
@@ -69,6 +78,7 @@ fb_error_code_t f2d_set_rules(
 ) {
     // Set neighborhood radius.
     field->nh_radius = nh_radius;
+    field->nh_type = nh_type;
 
     // Set survival conditions.
     field->s_conds_count = s_conds_count;
@@ -86,59 +96,87 @@ fb_error_code_t f2d_set_rules(
 }
 
 /// @brief Sets the field rules from a rulestring.
-/// Rulestring is adapted from the standard S/B notation, but changed in order to account for larger neighborhood radiuses.
-/// Rulestrings always present rules for both S (survival) and B (birth), even if there's no survival or birth condition at all.
-/// Rulestrings are also required to specify a neighborhood radius R before survival and birth conditions.
-/// Survival and birth states are separated by commas in order to make strings more readable with neighborhood radiuses greater than 1.
-/// Rules sections (radius, survival and birth) of the string are separated by a forward slash character.
-/// The notorious Conway's Game of Life ruleset can therefore be expressed as R:1/S:2,3/B:3, meaning it works with a neighborhood radius of 1,
-/// active cells stay active if 2 or 3 neighbors are active and inactive cells only become active if exactly 3 neighbors are active.
+/// Supports HROT (Higher Range Outer Totalistic) Notation:
+/// Rr/Cc/Slist/Blist/Nn
+/// Rr - specifies the neighborhood radius.
+/// Cc - specifies the number of states (c is from 0 to 256), defaults to 0 [not supported].
+/// Slist - specifies the list of possible active neighbors amounts for an active cell to survive.
+/// Blist - specifies the list of possible active neighbors amounts for an inactive cell to be born.
+/// Nn - specifies the neighborhood type, defaults to Moore.
+///
+/// Possible neighborhood types include Moore (M) and Von Neuman (N).
+/// Refer to https://golly.sourceforge.io/Help/Algorithms/Larger_than_Life.html for more.
+/// TODO Support more.
+/// The game of life is described therefore as R1/S2,3/B3/NM.
 fb_error_code_t f2d_set_rulestr(
     fb_field2d_t* field,
     char* rulestr
 ) {
-    char* r_str = strtok(rulestr, "/");
-    if (r_str == NULL) return FB_ERROR_WRONG_FORMAT;
-    char* s_str = strtok(NULL, "/");
-    if (s_str == NULL) return FB_ERROR_WRONG_FORMAT;
-    char* b_str = strtok(NULL, "/");
-    if (b_str == NULL) return FB_ERROR_WRONG_FORMAT;
+    char* save_str;
+    char* sec_str = strtok_r(rulestr, "/", &save_str);
+    while (sec_str != NULL) {
+        printf("SEC_STRING: %s\n", sec_str);
+        switch (sec_str[0]) {
+            case 'R':
+                // Read radius.
+                // Reading the radius is the simplest step, as it's expected to only be one number.
+                fb_nh_radius_t r_val = atoi(sec_str + 1);
+                field->nh_radius = r_val;
+                break;
+            case 'C':
+                // TODO
+                break;
+            case 'S':
+                fb_field_size_t s_conds_count = 0;
+                fb_field_size_t* s_conds = (fb_field_size_t*) malloc(100 * sizeof(fb_field_size_t));
+                if (s_conds == NULL) return FB_ERROR_FAILED_ALLOC;
+                char* s_vals_sec = sec_str + 1;
+                char* s_save_str;
+                char* s_valstr = strtok_r(s_vals_sec, ",", &s_save_str);
+                while (s_valstr != NULL) {
+                    s_conds_count++;
+                    s_conds[s_conds_count - 1] = atoi(s_valstr);
+                    s_valstr = strtok_r(NULL, ",", &s_save_str);
+                }
+                field->s_conds_count = s_conds_count;
+                field->s_conds = (fb_field_size_t*) malloc(s_conds_count * sizeof(fb_field_size_t));
+                if (field->s_conds == NULL) return FB_ERROR_FAILED_ALLOC;
+                memcpy(field->s_conds, s_conds, s_conds_count * sizeof(fb_field_size_t));
+                free(s_conds);
+                break;
+            case 'B':
+                fb_field_size_t b_conds_count = 0;
+                fb_field_size_t* b_conds = (fb_field_size_t*) malloc(100 * sizeof(fb_field_size_t));
+                if (b_conds == NULL) return FB_ERROR_FAILED_ALLOC;
+                char* b_vals_sec = sec_str + 1;
+                char* b_save_str;
+                char* b_valstr = strtok_r(b_vals_sec, ",", &b_save_str);
+                while (b_valstr != NULL) {
+                    b_conds_count++;
+                    b_conds[b_conds_count - 1] = atoi(b_valstr);
+                    b_valstr = strtok_r(NULL, ",", &b_save_str);
+                }
+                field->b_conds_count = b_conds_count;
+                field->b_conds = (fb_field_size_t*) malloc(b_conds_count * sizeof(fb_field_size_t));
+                if (field->b_conds == NULL) return FB_ERROR_FAILED_ALLOC;
+                memcpy(field->b_conds, b_conds, b_conds_count * sizeof(fb_field_size_t));
+                free(b_conds);
+                break;
+            case 'N':
+                switch (sec_str[1]) {
+                    case 'N':
+                        field->nh_type = FB_V_NEUMANN;
+                        break;
+                    case 'M':
+                    default:
+                        field->nh_type = FB_MOORE;
+                        break;
+                }
+                break;
+        }
 
-    // Read radius.
-    // Reading the radius is the simplest step, as it's expected to only be one number.
-    char* r_valstr = r_str + 2;
-    fb_nh_radius_t r_val = atoi(r_valstr);
-    field->nh_radius = r_val;
-
-    // Read survival conditions.
-    fb_field_size_t s_conds_count = 0;
-    fb_field_size_t* s_conds = (fb_field_size_t*) malloc(100 * sizeof(fb_field_size_t));
-    if (s_conds == NULL) return FB_ERROR_FAILED_ALLOC;
-    char* s_valstr = strtok(s_str + 2, ",");
-    while (s_valstr != NULL) {
-        s_conds_count++;
-        s_conds[s_conds_count - 1] = atoi(s_valstr);
-        s_valstr = strtok(NULL, ",");
+        sec_str = strtok_r(NULL, "/", &save_str);
     }
-    field->s_conds_count = s_conds_count;
-    field->s_conds = (fb_field_size_t*) malloc(s_conds_count * sizeof(fb_field_size_t));
-    if (field->s_conds == NULL) return FB_ERROR_FAILED_ALLOC;
-    memcpy(field->s_conds, s_conds, s_conds_count * sizeof(fb_field_size_t));
-
-    // Read birth conditions.
-    fb_field_size_t b_conds_count = 0;
-    fb_field_size_t* b_conds = (fb_field_size_t*) malloc(100 * sizeof(fb_field_size_t));
-    if (b_conds == NULL) return FB_ERROR_FAILED_ALLOC;
-    char* b_valstr = strtok(b_str + 2, ",");
-    while (b_valstr != NULL) {
-        b_conds_count++;
-        b_conds[b_conds_count - 1] = atoi(b_valstr);
-        b_valstr = strtok(NULL, ",");
-    }
-    field->b_conds_count = b_conds_count;
-    field->b_conds = (fb_field_size_t*) malloc(b_conds_count * sizeof(fb_field_size_t));
-    if (field->b_conds == NULL) return FB_ERROR_FAILED_ALLOC;
-    memcpy(field->b_conds, b_conds, b_conds_count * sizeof(fb_field_size_t));
 
     return FB_ERROR_NONE;
 }
@@ -183,6 +221,7 @@ fb_error_code_t f2d_rinitr(
     fb_field_size_t width,
     fb_field_size_t height,
     fb_field_size_t nh_radius,
+    fb_nh_type_t nh_type,
     fb_field_size_t s_conds_count,
     fb_field_size_t* s_conds,
     fb_field_size_t b_conds_count,
@@ -194,6 +233,7 @@ fb_error_code_t f2d_rinitr(
     err = f2d_set_rules(
         field,
         nh_radius,
+        nh_type,
         s_conds_count,
         s_conds,
         b_conds_count,
@@ -255,6 +295,7 @@ fb_error_code_t f2d_create_from(
     err = f2d_set_rules(
         *field,
         other->nh_radius,
+        other->nh_type,
         other->s_conds_count,
         other->s_conds,
         other->b_conds_count,
@@ -281,6 +322,10 @@ fb_error_code_t f2d_tick(
             fb_field_size_t active_nbs_count = 0;
             for (fb_field_size_t y = 0; y < nh_diam; y++) {
                 for (fb_field_size_t x = 0; x < nh_diam; x++) {
+                    int dx = abs(x - prev_field->nh_radius);
+                    int dy = abs(y - prev_field->nh_radius);
+                    if (prev_field->nh_type == FB_V_NEUMANN && dx + dy > prev_field->nh_radius) continue;
+
                     int nb_x = fb_mod(i + (x - prev_field->nh_radius), prev_field->width);
                     int nb_y = fb_mod(j + (y - prev_field->nh_radius), prev_field->height);
 

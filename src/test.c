@@ -5,18 +5,24 @@
 /// ./bin/test
 ///
 /// Interesting rulestrings:
-/// R:1/S:2,3/B:3 (Conway's Game of Life)
-/// R:1/S:2,3,6/B:3
-/// R:1/S:5,6,7,8/B:3,5,6,7,8 (Diamoeba)
-/// R:1/S:2,4,6,7,8/B:3,5,7,8 (Geology)
-/// R:1/S:3,5,6,7,8/B:4,6,7,8 (Anneal)
-/// R:2/S:3,5,7/B:6,7,9
-/// R:2/S:3,5,8/B:6,7,9
-/// R:2/S:10,11,13/B:6,7,9
-/// R:2/S:9,10,13/B:5,8,9
-/// R:3/S:20,21/B:10,11,12,14,15,23,30
-/// R:3/S:20,21/B:10,11,12,14,15,23,31,38,42
-/// R:4/S:12,20/B:11,14,15,23,31,38,45
+/// R1/S2,3/B3/NM (Conway's Game of Life)
+/// R1/S2,3,6/B3/NM
+/// R1/S5,6,7,8/B3,5,6,7,8/NM (Diamoeba)
+/// R1/S2,4,6,7,8/B3,5,7,8/NM (Geology)
+/// R1/S3,5,6,7,8/B4,6,7,8/NM (Anneal)
+/// R2/S3,5,7/B6,7,9/NM
+/// R2/S3,5,8/B6,7,9/NM
+/// R2/S10,11,13/B6,7,9/NM
+/// R2/S9,10,13/B5,8,9/NM
+/// R3/S20,21/B10,11,12,14,15,23,30/NM
+/// R3/S20,21/B10,11,12,14,15,23,31,38,42/NM
+/// R4/S12,20/B11,14,15,23,31,38,45/NM
+/// R1/S2/B2,3/NN
+/// R1/S2/B2,3,4/NN
+/// R1/S2,3/B2,4/NN "Mondrian"
+/// R1/S1,4/B2,3/NN "Burn it all"
+/// R2/S2/B3/NN
+/// R4/S8,9,10,11,15/B9,10,13,19/NN
 
 #include <stdio.h>
 #include <stdint.h>
@@ -67,7 +73,7 @@ void main(int argc, char* argv[]) {
     srand(time(NULL));
 
     fb_field2d_t* even_field;
-    char rulestr[] = "R:1/S:2,3/B:3";
+    char rulestr[] = "R1/S2,3/B3/NM";
     fb_error_code_t err = f2d_rcreate(&even_field, FIELD_WIDTH, FIELD_HEIGHT, argc > 1 ? argv[1] : rulestr);
     if (err != FB_ERROR_NONE) {
         printf("ERROR creating field: %u\n", err);

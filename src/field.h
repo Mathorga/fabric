@@ -1,48 +1,28 @@
 /*
 *****************************************************************
-field.h
+hrot_field.h
 
 Copyright (C) 2026 Luka Micheletti
 *****************************************************************
 */
 
-#ifndef __FABRIC_FIELD__
-#define __FABRIC_FIELD__
+#ifndef __FABRIC_HROT_FIELD__
+#define __FABRIC_HROT_FIELD__
 
-#include <stdint.h>
+#include "utils.h"
 #include "error.h"
-
-/// Computes a neighborhood diameter given its radius.
-#define FB_NH_DIAM_2D(r) ((2 * (r)) + 1)
-
-// Translates bidimensional indexes to a monodimensional one.
-// |i| is the row index.
-// |j| is the column index.
-// |m| is the number of columns (length of the rows).
-#define FB_IDX2D(i, j, m) (((m) * (j)) + (i))
-
-typedef uint64_t fb_field_size_t;
-// typedef uint8_t fb_cell_state_t;
-typedef uint8_t fb_nh_radius_t;
-
-// Using a 32 bit integer ensures a neighborhood radius of 255 (the maximum 8-bit value) is still supported.
-typedef uint32_t fb_nh_count_t;
 
 typedef enum {
     FB_INACTIVE = 0x00u,
     FB_ACTIVE = 0x01u
 } fb_cell_state_t;
 
-typedef enum {
-    FB_FALSE = 0x00u,
-    FB_TRUE = 0x01u
-} fb_bool_t;
-
 // Neighborhood type defines which cells are included from the neighborhood.
 // Von Neuman neighborhoods include all cells in the neighborhood, whereas Moore neighborhoods only include cells coordinates sum up to R (R being the neighborhood radius). 
 typedef enum {
     FB_V_NEUMANN = 0x00u,
-    FB_MOORE = 0x01u
+    FB_MOORE = 0x01u,
+    FB_PERIMETER = 0x02u
 } fb_nh_type_t;
 
 /// @brief Basic struct for a field. Includes all data and the neighborhood radius, along with the ruleset.
@@ -166,6 +146,9 @@ fb_error_code_t f2d_set_rulestr(
                 switch (sec_str[1]) {
                     case 'N':
                         field->nh_type = FB_V_NEUMANN;
+                        break;
+                    case 'P':
+                        field->nh_type = FB_PERIMETER;
                         break;
                     case 'M':
                     default:
@@ -306,6 +289,57 @@ fb_error_code_t f2d_create_from(
     return FB_ERROR_NONE;
 }
 
+/// @brief Counts active neighbors for the cell at coordinates (x_coord,y_coord).
+/// @param field The field to read neighbors from.
+/// @param x_coord The x coordinate for the requested cell.
+/// @param y_coord The y coordinate for the requested cell.
+/// @param counter The counter to increment on active neighbor found.
+/// @return Error
+fb_error_code_t fb_count_active_nbs(
+    fb_field2d_t* field,
+    fb_field_size_t x_coord,
+    fb_field_size_t y_coord,
+    fb_field_size_t* counter
+) {
+    fb_field_size_t nh_diam = FB_NH_DIAM_2D(field->nh_radius);
+    switch (field->nh_type) {
+        case FB_MOORE:
+        case FB_V_NEUMANN:
+            for (fb_field_size_t j = 0; j < nh_diam; j++) {
+                for (fb_field_size_t i = 0; i < nh_diam; i++) {
+                    int dx = abs(i - field->nh_radius);
+                    int dy = abs(j - field->nh_radius);
+                    if (field->nh_type == FB_V_NEUMANN && dx + dy > field->nh_radius) continue;
+
+                    int nb_x = fb_mod(x_coord + (i - field->nh_radius), field->width);
+                    int nb_y = fb_mod(y_coord + (j - field->nh_radius), field->height);
+
+                    // Skip the current cell itself in neighbors count.
+                    if (nb_x == x_coord && nb_y == y_coord) continue;
+
+                    if (field->data[FB_IDX2D(nb_x, nb_y, field->width)]) (*counter)++;
+                }
+            }
+            break;
+        case FB_PERIMETER:
+            for (fb_field_size_t j = 0; j < nh_diam; j++) {
+                for (fb_field_size_t i = 0; i < nh_diam; i++) {
+                    if (i > 0 && i < nh_diam - 1 && j > 0 && j < nh_diam - 1) continue;
+
+                    int nb_x = fb_mod(x_coord + (i - field->nh_radius), field->width);
+                    int nb_y = fb_mod(y_coord + (j - field->nh_radius), field->height);
+
+                    // Skip the current cell itself in neighbors count.
+                    if (nb_x == x_coord && nb_y == y_coord) continue;
+
+                    if (field->data[FB_IDX2D(nb_x, nb_y, field->width)]) (*counter)++;
+                }
+            }
+        default:
+            break;
+    }
+}
+
 fb_error_code_t f2d_tick(
     fb_field2d_t* prev_field,
     fb_field2d_t* next_field
@@ -318,24 +352,8 @@ fb_error_code_t f2d_tick(
             fb_cell_state_t cell_state = prev_field->data[cell_index];
 
             // Count active neighbors.
-            fb_field_size_t nh_diam = FB_NH_DIAM_2D(prev_field->nh_radius);
             fb_field_size_t active_nbs_count = 0;
-            for (fb_field_size_t y = 0; y < nh_diam; y++) {
-                for (fb_field_size_t x = 0; x < nh_diam; x++) {
-                    int dx = abs(x - prev_field->nh_radius);
-                    int dy = abs(y - prev_field->nh_radius);
-                    if (prev_field->nh_type == FB_V_NEUMANN && dx + dy > prev_field->nh_radius) continue;
-
-                    int nb_x = fb_mod(i + (x - prev_field->nh_radius), prev_field->width);
-                    int nb_y = fb_mod(j + (y - prev_field->nh_radius), prev_field->height);
-
-                    // Skip the current cell itself in neighbors count.
-                    if (nb_x == i && nb_y == j) continue;
-
-                    if (prev_field->data[FB_IDX2D(nb_x, nb_y, prev_field->width)])
-                        active_nbs_count++;
-                }
-            }
+            fb_error_code_t error = fb_count_active_nbs(prev_field, i, j, &active_nbs_count);
 
             // Now check against rules in order to compute the next state.
             if (cell_state == FB_ACTIVE) {

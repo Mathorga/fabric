@@ -23,6 +23,7 @@
 /// R1/S1,4/B2,3/NN "Burn it all"
 /// R2/S2/B3/NN
 /// R4/S8,9,10,11,15/B9,10,13,19/NN
+/// R4/S8,9,10,11,15/B9,10,13,18/NP
 
 #include <stdio.h>
 #include <stdint.h>
